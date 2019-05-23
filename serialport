@@ -1,0 +1,327 @@
+using System;
+using System.IO.Ports;
+using System.Collections.Generic;
+using System.Text;
+using System.Runtime.InteropServices;
+
+using System.Windows.Forms;
+
+namespace HisenseGD_BX.BaseClass
+{
+    public class Scan_1D  
+    //public class Scan_1D 
+    {
+        #region 操作变量声明
+
+        #region 热键操作声明
+        protected const int WM_HOTKEY = 0x0312;
+        private readonly uint SCANKEY_VK = 44;
+        private readonly int keyindentifier = 995;
+        #endregion
+
+
+        private SerialPort sp;
+        private Timer timer;
+
+
+        StringBuilder temp = new StringBuilder(16);
+         
+        /// <summary>
+        /// PLC 连接端口
+        /// </summary>
+        private System.IO.Ports.SerialPort serialPortPLC = new SerialPort();
+        public static System.IO.Ports.SerialPort serialPortScanner = new SerialPort();
+
+        #endregion
+
+        #region win api
+
+        #region 热键使用
+        [DllImport("coredll.dll")]
+        protected static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        [DllImport("coredll.dll")]
+        protected static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+        #endregion
+
+        #region 读取初始化文件
+
+        [DllImport("Kernel32.dll")]
+        private static extern long WritePrivateProfileString(string section, string key, string val, string filePath);
+        [DllImport("Kernel32.dll")]
+        private static extern int GetPrivateProfileString(string section, string key, string def, StringBuilder retval, int size, string filePath);
+
+        #endregion
+        #endregion
+
+   
+
+        #region 事件 and 委托
+
+        public delegate void ScannerMsgHandler(byte[] data);
+        public event ScannerMsgHandler PlcMsg;
+
+        #endregion
+
+  
+
+        #region 定时器
+        private void SetTimer()
+        {
+            timer = new Timer();
+            timer.Interval = 2000;
+            timer.Tick += new EventHandler(timer_Tick);
+        }
+
+        void timer_Tick(object sender, EventArgs e)
+        {
+            this.sp.DtrEnable = false;
+            this.timer.Enabled = false;
+        }
+        #endregion
+
+        #region 串口
+        public void OpenPort()
+        {
+            if (sp != null)
+            {
+                if (sp.IsOpen)
+                {
+                    ClosePort();
+                }
+            }
+            sp.Open();
+            System.Threading.Thread.Sleep(20);
+            sp.Close();
+            this.sp.Handshake = Handshake.None;
+
+
+            sp.DataReceived += new SerialDataReceivedEventHandler(sp_DataReceived);
+            sp.ErrorReceived += new SerialErrorReceivedEventHandler(sp_ErrorReceived);
+
+            sp.Open();
+
+            sp.DiscardInBuffer();
+            sp.DiscardOutBuffer();
+        }
+
+        private bool InitComScanAndPLC(  string strPLC)
+        {
+            try
+            {
+                string strFilePath = Application.StartupPath + "\\Config.txt";
+                 GetPrivateProfileString("PLC", "PLC", "读取配置文件错误", temp, 255, strFilePath);
+                strPLC = temp.ToString();
+                temp.Remove(0, temp.Length);
+
+
+                string[]  cell = strPLC.Split(',');
+                serialPortPLC.PortName = cell[0];
+                serialPortPLC.BaudRate = Convert.ToInt32(cell[1]);
+                switch (cell[2])
+                {
+                    case "无":
+                        serialPortPLC.Parity = Parity.None;
+                        break;
+                    case "奇校验":
+                        serialPortPLC.Parity = Parity.Odd;
+                        break;
+                    case "偶校验":
+                        serialPortPLC.Parity = Parity.Even;
+                        break;
+                }
+                serialPortPLC.DataBits = Convert.ToInt16(cell[3]);
+                switch (cell[4])
+                {
+                    case "1":
+                        serialPortPLC.StopBits = StopBits.One;
+                        break;
+                    case "2":
+                        serialPortPLC.StopBits = StopBits.Two;
+                        break;
+                }
+
+                //GetPrivateProfileString("Scanner", "Scanner", "读取配置文件错误", temp, 255, strFilePath);
+                //strScanner = temp.ToString();
+                temp.Remove(0, temp.Length);
+
+
+                //cell = strScanner.Split(',');
+                serialPortScanner.PortName = cell[0];
+                serialPortScanner.BaudRate = Convert.ToInt32(cell[1]);
+                switch (cell[2])
+                {
+                    case "无":
+                        serialPortScanner.Parity = Parity.None;
+                        break;
+                    case "奇校验":
+                        serialPortScanner.Parity = Parity.Odd;
+                        break;
+                    case "偶校验":
+                        serialPortScanner.Parity = Parity.Even;
+                        break;
+                }
+                serialPortScanner.DataBits = Convert.ToInt16(cell[3]);
+                switch (cell[4])
+                {
+                    case "1":
+                        serialPortScanner.StopBits = StopBits.One;
+                        break;
+                    case "2":
+                        serialPortScanner.StopBits = StopBits.Two;
+                        break;
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("请先配置扫描头和PLC端口", "配置文件打开错误");
+                return false;
+            }
+        }
+        private void InitPort()
+        {
+            sp = new SerialPort();
+            if (InitComScanAndPLC("PLC"))
+            {
+                sp.PortName = serialPortPLC.PortName;
+                sp.BaudRate = serialPortPLC.BaudRate;
+                sp.DataBits = serialPortPLC.DataBits;
+
+                sp.Parity = (Parity)Enum.Parse(typeof(Parity), "0", true);
+                sp.StopBits = (StopBits)Enum.Parse(typeof(StopBits), "1", true);
+
+                this.sp.RtsEnable = true;
+                this.sp.Handshake = Handshake.RequestToSend;
+                this.sp.RtsEnable = false;
+            }
+        }
+
+        public void ClosePort()
+        {
+            if (sp != null)
+                if (sp.IsOpen)
+                {
+                    sp.Close();
+                    sp.Dispose();
+                    sp = null;
+                }
+        }
+
+        public void WritePort(byte[] data)
+        {
+            //this.sp.DtrEnable = true;
+            //sp.RtsEnable = true;
+            System.Threading.Thread.Sleep(20);
+            sp.Write(data, 0, data.Length);
+            System.Threading.Thread.Sleep(20);
+            //sp.RtsEnable = false;
+            //this.sp.DtrEnable = false;
+        }
+
+        #region 串口事件和方法
+        private void sp_DataReceived(object sender, SerialDataReceivedEventArgs e)
+        {
+            System.Threading.Thread.Sleep(100);
+            if (this.sp.BytesToRead < 2)
+                return;
+
+            byte[] bytes = new byte[this.sp.BytesToRead];
+            this.sp.Read(bytes, 0, bytes.Length);
+            this.timer.Enabled = false;
+            this.sp.DtrEnable = false;
+            if (PlcMsg != null)
+            {
+                sp.DiscardInBuffer();
+                PlcMsg(bytes);
+            }
+        }
+
+        private void sp_ErrorReceived(object sender, SerialErrorReceivedEventArgs e)
+        {
+            System.Threading.Thread.Sleep(5);
+        }
+        #endregion
+
+        #endregion
+
+        #region 初始化
+        private Scan_1D()
+        {
+            try
+            {
+                InitPort();
+                OpenPort();
+                SetTimer();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Open port error:" + ex.Message);
+                return;
+            }
+            
+        }
+        private static Scan_1D scanner;
+
+        public static Scan_1D PLCCom
+        {
+            get
+            {
+                if (scanner == null)
+                {
+                    scanner = new Scan_1D();
+                }
+                if (scanner.sp == null)
+                    scanner = new Scan_1D();
+                return scanner;
+            }
+        }
+        #endregion
+
+        #region 释放扫描资源
+        public void ScanDispose()
+        {
+            ClosePort();
+        }
+        #endregion
+
+        public bool AddCheckSum(byte[] pBuf, int iSize)
+        {
+            int iCheckSum = 0;
+            int i;
+            if (iSize <= 2 || iSize > 257)
+                return false;
+
+            pBuf[0] = (byte)(iSize - 2);
+
+            for (i = 0; i < pBuf[0]; i++)
+                iCheckSum += pBuf[i];
+
+            pBuf[i] = (byte)((-iCheckSum) >> 8);
+            pBuf[i + 1] = (byte)(-iCheckSum);
+
+            return true;
+        }
+
+        public void Param_Send(byte paramID, byte paramValue)
+        {
+            byte[] data = new byte[] { 7, 0xC6, 0x04, 0x09, 0x04, paramID, paramValue, 0x00, 0x00 };
+
+            if (AddCheckSum(data, data.Length))
+                WritePort(data);
+            else
+                throw new Exception("AddCheckSum is error");
+        }
+
+        public void Param_Request(byte paramID)
+        {//06 C7 04 00 01 9C FE 92
+            byte[] data = new byte[] { 0x05, 0xC7, 0x04, 0x01, paramID, 0xFF, 0x2C };
+
+            if (AddCheckSum(data, data.Length))
+                WritePort(data);
+            else
+                throw new Exception("AddCheckSum is error");
+        }
+
+
+    }
+}
